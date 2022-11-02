@@ -1,0 +1,108 @@
+DNS（bind-chroot）安装配置文档
+
+chroot是通过将DNS的相关文件封装在一个伪根目录（即“牢狱”）内，以达到安全防护的目的，一旦程序被攻破，也只能访问伪根目录内的内容，而不是真实根目录的内容。
+0、配置网络环境（虚拟机网卡为同一模式），关闭防火墙和selinux
+systemctl stop firewalld
+systemctl disable firewalld
+setenforce 0
+1、安装相关软件包
+yum install -y bind bind-chroot
+2、复制配置文件模板
+cp /etc/named.conf /var/named/chroot/etc/named.conf
+3、修改bind服务的主配置文件（只保留下面的内容）
+vi /var/named/chroot/etc/named.conf
+options
+{
+         directory               "/var/named"; 
+         listen-on port 53       { any; };
+         listen-on-v6 port 53    { any; };
+};
+
+zone "test.com" {
+  type master;
+  file "named.test.com";
+};
+
+zone "100.168.192.in-addr.arpa" {
+  type master;
+  file "named.192.168.100";
+};
+
+修改配置文件权限
+chmod 777 /var/named/chroot/etc/named.conf
+4、配置正向解析和反向解析
+（2）新建正向解析域文件
+cp /var/named/named.localhost /var/named/chroot/var/named/named.test.com 
+vi /var/named/chroot/var/named/named.test.com
+$TTL 1D
+@       IN SOA  dns.test.com. root.test.com. (
+                        0       ; serial
+                        1D      ; refresh
+                        1H      ; retry
+                        1W      ; expire
+                        3H )    ; minimum
+@    IN        NS      dns.test.com.
+dns     IN A    192.168.23.100
+www     IN A    192.168.23.100
+ftp     IN A    192.168.23.100
+web     IN CNAME   www
+
+检查正向区域文件是否正确：
+named-checkzone "test.com" "/var/named/chroot/var/named/named.test.com"
+
+修改配置文件权限
+chmod 777 /var/named/chroot/var/named/named.test.com
+
+（3）新建反向解析域文件
+切换目录到/var/named/chroot/var/named/
+cp named.test.com named.192.168.100
+
+vi /var/named/chroot/var/named/named.192.168.100
+$TTL 1D
+@       IN SOA  dns.test.com. root.test.com. (
+                        0       ; serial
+                        1D      ; refresh
+                        1H      ; retry
+                        1W      ; expire
+                        3H )    ; minimum
+@    IN        NS      dns.test.com.
+100     IN PTR    dns.test.com.
+100     IN PTR    www.test.com.
+100     IN PTR    ftp.test.com.
+检查反向区域文件是否正确：
+named-checkzone "100.168.192.in-addr.arpa" "/var/named/chroot/var/named/named.192.168.100"
+
+修改配置文件权限
+chmod 777 /var/named/chroot/var/named/named.192.168.100
+5、禁用bind默认方式启动，改用bind-chroot方式启动
+/usr/libexec/setup-named-chroot.sh /var/named/chroot on
+systemctl stop named
+systemctl disable named
+systemctl start named-chroot
+systemctl enable named-chroot
+ps -ef|grep named
+6、测试验证
+nslookup
+> www.test.com
+Server:         127.0.0.1
+Address:        127.0.0.1#53
+
+Name:   www.test.com
+Address: 192.168.100.20
+> ftp.test.com
+Server:         127.0.0.1
+Address:        127.0.0.1#53
+
+Name:   ftp.test.com
+Address: 192.168.100.20
+> 192.168.100.20
+20.100.168.192.in-addr.arpa     name = ftp.test.com.100.168.192.in-addr.arpa.
+20.100.168.192.in-addr.arpa     name = www.test.com.100.168.192.in-addr.arpa.
+
+
+
+常见问题：
+1、	文档权限；777
+2、	域名后缀要加点
+3、	语法错误，查看日志/var/log/messages
+4、	正反向文件不一致，最后复制正向文件
